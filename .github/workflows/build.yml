@@ -1,0 +1,103 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # ১. যেকোনো জিপ অটো-আনজিপ করা এবং রুট ফোল্ডারে ফাইল সাজানো
+    - name: Unzip and Move Files
+      run: |
+        unzip -o *.zip || true
+        if [ ! -f "build.gradle.kts" ] && [ ! -f "build.gradle" ]; then
+          shopt -s dotglob
+          mv */* . 2>/dev/null || true
+        fi
+        touch .env
+        touch .env.example
+
+    # ২. সব জায়গায় সরাসরি সঠিক প্যাকেজ নেম দিয়ে google-services.json জেনারেট করা
+    - name: Force Fix google-services.json Package Name
+      run: |
+        PKG_NAME="com.aistudio.childguardian.cgapp"
+        echo "Forcing Package Name to: $PKG_NAME"
+
+        # app ফোল্ডার নিশ্চিত করা
+        mkdir -p app/
+        mkdir -p android/app/
+
+        # ভ্যালিড JSON কন্টেন্ট তৈরি
+        JSON_CONTENT='{
+          "project_info": {
+            "project_number": "123456789012",
+            "project_id": "child-guardian-app",
+            "storage_bucket": "child-guardian-app.appspot.com"
+          },
+          "client": [
+            {
+              "client_info": {
+                "mobilesdk_app_id": "1:123456789012:android:1234567890123456",
+                "android_client_info": {
+                  "package_name": "'"$PKG_NAME"'"
+                }
+              },
+              "oauth_client": [],
+              "api_key": [
+                {
+                  "current_key": "AIzaSyDummyKeyForBuildVerificationOnly"
+                }
+              ],
+              "services": {
+                "appinvite_service": {
+                  "other_platform_oauth_client": []
+                }
+              }
+            }
+          ],
+          "configuration_version": "1"
+        }'
+
+        # সব সম্ভাব্য জায়গায় ফাইলটি রাইট করা
+        echo "$JSON_CONTENT" > app/google-services.json
+        echo "$JSON_CONTENT" > android/app/google-services.json
+        echo "$JSON_CONTENT" > google-services.json
+
+    # ৩. জাভা ভার্সন সেটআপ (Java 21)
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    # ৪. সই (Signing) সম্পর্কিত সমস্যা এড়াতে মিসিং Debug Keystore অটো-জেনারেট করা
+    - name: Generate Debug Keystore
+      run: |
+        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+
+    # ৫. অ্যান্ড্রয়েড SDK এবং গ্র্যাডেল ৯.৩.১ রেডি করা
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Generate Gradle Wrapper
+      run: gradle wrapper --gradle-version 9.3.1
+
+    - name: Make gradlew executable
+      run: chmod +x gradlew
+
+    # ৬. APK তৈরি করা
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --no-daemon --no-configuration-cache
+
+    # ৭. তৈরি হওয়া APK ফাইলটি ডাউনলোডের জন্য আপলোড করা
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: "**/build/outputs/apk/debug/*.apk"
